@@ -27,7 +27,6 @@ async def main():
     m = await mock(); os.environ["UNSLOTH_URL"] = f"http://127.0.0.1:{m.port}"
     spec = importlib.util.spec_from_file_location("server", "server.py"); S = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(S)
-    sys.argv = ["x", "adduser", "ana", "pw1", "novice"]; spec.loader.exec_module  # noqa
     for name, pw, lvl, adm in [("ana", "pw1", "novice", 0), ("boss", "pw2", "expert", 1)]:
         import hashlib, os as _o
         salt = _o.urandom(16); c = S.db()
