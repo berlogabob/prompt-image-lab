@@ -94,8 +94,8 @@ async def login(req):
         fails[name] = f + [time.time()]
         raise web.HTTPUnauthorized()
     r = web.json_response({"name": name, "admin": bool(u["admin"])})
-    r.set_cookie("s", sign(u["id"]), httponly=True, samesite="Lax", max_age=7 * 86400,
-                 secure=req.headers.get("X-Forwarded-Proto") == "https")
+    r.set_cookie("s", sign(u["id"]), httponly=True, samesite="None" if ORIGIN else "Lax", max_age=7 * 86400,
+                 secure=bool(ORIGIN) or req.headers.get("X-Forwarded-Proto") == "https")
     return r
 
 
@@ -230,16 +230,32 @@ async def admin_csv(req):
                         headers={"Content-Disposition": "attachment; filename=summary.csv"})
 
 
+ORIGIN = os.environ.get("ORIGIN", "")  # e.g. https://berlogabob.github.io when the UI is hosted on Pages
+
+
+@web.middleware
+async def cors(req, handler):
+    try:
+        resp = web.Response() if req.method == "OPTIONS" else await handler(req)
+    except web.HTTPException as e:
+        resp = e
+    if ORIGIN:
+        resp.headers.update({"Access-Control-Allow-Origin": ORIGIN, "Access-Control-Allow-Credentials": "true",
+                             "Access-Control-Allow-Headers": "Content-Type", "Vary": "Origin"})
+    return resp
+
+
 def make_app():
-    app = web.Application(client_max_size=1 << 20)
+    app = web.Application(client_max_size=1 << 20, middlewares=[cors])
     app["gpu"] = asyncio.Lock()
     app.add_routes([
         web.post("/api/login", login), web.post("/api/logout", logout), web.get("/api/me", me),
         web.get("/api/tasks", task_list), web.post("/api/generate", generate), web.post("/api/finish", finish),
         web.get("/img/{name}", image), web.get("/task-img/{name}", task_image),
         web.get("/api/admin/stats", admin_stats), web.get("/api/admin/summary.csv", admin_csv),
-        web.get("/", lambda r: web.FileResponse(ROOT / "static" / "index.html")),
-        web.get("/admin", lambda r: web.FileResponse(ROOT / "static" / "admin.html")),
+        web.get("/", lambda r: web.FileResponse(ROOT / "index.html")),
+        web.get("/admin", lambda r: web.FileResponse(ROOT / "admin.html")),
+        web.get("/config.js", lambda r: web.FileResponse(ROOT / "config.js")),
     ])
     return app
 

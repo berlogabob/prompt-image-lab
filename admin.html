@@ -4,18 +4,20 @@
 <style>:root{color-scheme:light dark}body{font:15px system-ui,sans-serif;padding:16px}
 table{border-collapse:collapse;margin:12px 0}td,th{border:1px solid #8886;padding:4px 8px;text-align:left;vertical-align:top}
 .wrap{overflow-x:auto}img{height:60px}</style></head><body>
-<h1>Stats</h1><p><a href="/">Back</a> · <a href="/api/admin/summary.csv">Download summary CSV</a></p>
+<h1>Stats</h1><p><a href="index.html">Back</a> · <a id="csv">Download summary CSV</a></p>
 <h2>Per user and task</h2><div class="wrap"><table id="sum"></table></div>
 <h2>Prompt history</h2><div class="wrap"><table id="pr"></table></div>
+<script src="config.js"></script>
 <script>
 function fill(t,rows,cols){
   t.replaceChildren();
   const h=t.insertRow(); cols.forEach(c=>h.insertCell().outerHTML=`<th>${c}</th>`);
   rows.forEach(r=>{const tr=t.insertRow(); cols.forEach(c=>{const td=tr.insertCell();
-    if(c==="images") JSON.parse(r.files).forEach(f=>{const i=new Image();i.src="/img/"+f;td.append(i)});
+    if(c==="images") JSON.parse(r.files).forEach(f=>{const i=new Image();i.src=BASE+"/img/"+f;td.append(i)});
     else td.textContent=c==="ts"?new Date(r.ts*1000).toLocaleString():(r[c]??"");});});
 }
-fetch("/api/admin/stats").then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
+document.getElementById("csv").href=BASE+"/api/admin/summary.csv";
+fetch(BASE+"/api/admin/stats",{credentials:"include"}).then(r=>r.ok?r.json():Promise.reject(r.status)).then(d=>{
   fill(document.getElementById("sum"),d.summary,["user","level","task","status","attempts","images","avg_prompt_chars","rating","minutes"]);
   fill(document.getElementById("pr"),d.prompts,["ts","user","level","task","prompt","n","images"]);
 }).catch(e=>document.body.append("Not allowed: "+e));

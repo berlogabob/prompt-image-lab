@@ -46,9 +46,10 @@ textarea{width:100%;min-height:6em}
     <div id="hist" class="hist"></div>
   </div>
 </div>
+<script src="config.js"></script>
 <script>
 const $=id=>document.getElementById(id);
-const J=(u,b)=>fetch(u,b?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}:{});
+const J=(u,b)=>fetch(BASE+u,{credentials:"include",...(b?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}:{})});
 let T=[],cur=null,picked=null;
 
 async function start(){
@@ -56,7 +57,7 @@ async function start(){
   $("login").hidden=r.ok; $("app").hidden=!r.ok;
   if(!r.ok) return;
   const m=await r.json(); $("who").textContent=m.name+(m.admin?" (admin)":"");
-  if(m.admin) $("who").innerHTML+=' <a href="/admin">stats</a>';
+  if(m.admin) $("who").innerHTML+=' <a href="admin.html">stats</a>';
   await load(); show(null);
 }
 async function load(){ T=await (await J("/api/tasks")).json(); }
@@ -79,7 +80,7 @@ function show(id){
     return;
   }
   $("title").textContent=cur.title; $("brief").textContent=cur.brief;
-  $("ref").hidden=!cur.image; if(cur.image) $("ref").src="/task-img/"+cur.image;
+  $("ref").hidden=!cur.image; if(cur.image) $("ref").src=BASE+"/task-img/"+cur.image;
   $("prompt").value="";
   $("go").disabled=$("giveup").disabled=cur.done; 
   renderHist();
@@ -98,7 +99,7 @@ $("go").onclick=async()=>{
   const a=await r.json(); $("status").textContent="Pick the best one if it matches the task, or refine the prompt.";
   cur.history.push({prompt,n:a.files.length,files:a.files,id:a.attempt}); renderHist();
   $("res").replaceChildren(...a.files.map((f,i)=>{const l=document.createElement("label");
-    l.innerHTML=`<input type="radio" name="p" hidden><img src="/img/${f}"><a download href="/img/${f}">Download</a>`;
+    l.innerHTML=`<input type="radio" name="p" hidden><img src="${BASE}/img/${f}"><a download href="${BASE}/img/${f}">Download</a>`;
     l.querySelector("input").onchange=()=>{picked=[a.attempt,i];$("rate").hidden=false;}; return l;}));
 };
 $("done").onclick=async()=>{

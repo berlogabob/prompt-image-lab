@@ -2,7 +2,7 @@
 
 Research tool: participants with different expertise solve the same flash-card tasks (generate / edit an image) by prompting; we log every prompt and attempt and the participant's own verdict on the result.
 
-One Python server on the studio PC does everything: logins, task cards, prompt logging, admin stats, and proxies image jobs to Unsloth Studio (its API key never reaches the browser). Expose it through one tunnel; no GitHub Pages needed.
+One Python server on the studio PC does everything: logins, task cards, prompt logging, admin stats, and proxies image jobs to Unsloth Studio (its API key never reaches the browser). Expose it through one tunnel. The UI is either served by the server itself (tunnel URL) or hosted on GitHub Pages (https://berlogabob.github.io/prompt-image-lab/), which calls the server cross-origin.
 
 ## Run (studio PC)
 1. Unsloth Studio running with an image model loaded; create an API key in Studio.
@@ -11,6 +11,7 @@ One Python server on the studio PC does everything: logins, task cards, prompt l
    Level is a free label (novice/intermediate/expert) used to group the stats.
 3. Tasks: edit `tasks/tasks.json` (`kind` generate|edit; edit tasks need `image` = file in `tasks/`; generate tasks may show a reference `image`).
 4. `UNSLOTH_KEY=... uv run server.py` then `tailscale funnel 8080` (or `cloudflared tunnel --url http://127.0.0.1:8080`). Share the URL + logins.
+   For the Pages UI: set `ORIGIN=https://berlogabob.github.io` when starting the server, and put the tunnel URL in `BASE` in `config.js` (commit, push). Needs HTTPS tunnel; browsers that block third-party cookies will break login, then use the tunnel URL directly.
    Optional env: `UNSLOTH_URL` (default http://127.0.0.1:8888), `EDIT_WORKFLOW` (Studio edit workflow name), `PORT`, `DATA`.
 
 ## Data
