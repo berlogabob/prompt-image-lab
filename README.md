@@ -6,9 +6,7 @@ One Python server on the studio PC does everything: logins, task cards, prompt l
 
 ## Run (studio PC)
 1. Unsloth Studio running with an image model loaded; create an API key in Studio.
-2. Accounts (no password recovery; re-running resets the password):
-   `uv run server.py adduser ana pw123 novice` / `... adduser boss pw456 expert --admin`
-   Level is a free label (novice/intermediate/expert) used to group the stats.
+2. Accounts: copy `users.example.toml` to `users.toml` (gitignored, plain text: password, level, admin). Edits apply immediately; no recovery flow, you assign passwords.
 3. Tasks: edit `tasks/tasks.json` (`kind` generate|edit; edit tasks need `image` = file in `tasks/`; generate tasks may show a reference `image`).
 4. `UNSLOTH_KEY=... uv run server.py` then `tailscale funnel 8080` (or `cloudflared tunnel --url http://127.0.0.1:8080`). Share the URL + logins.
    For the Pages UI: set `ORIGIN=https://berlogabob.github.io` when starting the server, and put the tunnel URL in `BASE` in `config.js` (commit, push). Needs HTTPS tunnel; browsers that block third-party cookies will break login, then use the tunnel URL directly.

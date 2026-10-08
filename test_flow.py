@@ -23,14 +23,13 @@ async def mock():
 
 
 async def main():
-    os.environ["DATA"] = tempfile.mkdtemp(); os.environ["UNSLOTH_KEY"] = "k"
+    os.environ["DATA"] = tempfile.mkdtemp()
+    uf = os.path.join(os.environ["DATA"], "users.toml")
+    open(uf, "w").write('[ana]\npassword="pw1"\nlevel="novice"\n[boss]\npassword="pw2"\nlevel="expert"\nadmin=true\n')
+    os.environ["USERS"] = uf; os.environ["UNSLOTH_KEY"] = "k"
     m = await mock(); os.environ["UNSLOTH_URL"] = f"http://127.0.0.1:{m.port}"
     spec = importlib.util.spec_from_file_location("server", "server.py"); S = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(S)
-    for name, pw, lvl, adm in [("ana", "pw1", "novice", 0), ("boss", "pw2", "expert", 1)]:
-        import hashlib, os as _o
-        salt = _o.urandom(16); c = S.db()
-        c.execute("insert into users(name,salt,hash,level,admin) values(?,?,?,?,?)", (name, salt, S.pw_hash(pw, salt), lvl, adm)); c.commit()
     async with TestClient(TestServer(S.make_app())) as c:
         assert (await c.get("/api/tasks")).status == 401
         assert (await c.post("/api/login", json={"name": "ana", "password": "bad"})).status == 401

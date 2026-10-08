@@ -1,0 +1,9 @@
+# Copy to users.toml (gitignored). Plain text, edited by hand; changes apply immediately.
+[ana]
+password = "change-me"
+level = "novice"        # free label used to group stats
+
+[boss]
+password = "change-me-too"
+level = "expert"
+admin = true            # can open /admin and see everyone's prompts

@@ -1,13 +1,12 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.11"
 # dependencies = ["aiohttp"]
 # ///
 """Study server: logins, task cards, prompt logging, Unsloth Studio proxy, admin stats.
 
-  uv run server.py adduser NAME PASSWORD LEVEL [--admin]   (re-running resets the password)
-  UNSLOTH_KEY=... uv run server.py                          (serves on 127.0.0.1:8080)
+  UNSLOTH_KEY=... uv run server.py     (serves on 127.0.0.1:8080; accounts come from users.toml)
 """
-import asyncio, base64, csv, hashlib, hmac, io, json, os, secrets, sqlite3, sys, time
+import asyncio, base64, csv, hmac, io, json, os, secrets, sqlite3, time, tomllib
 from pathlib import Path
 from aiohttp import ClientSession, ClientTimeout, web
 
@@ -17,12 +16,10 @@ UNSLOTH = os.environ.get("UNSLOTH_URL", "http://127.0.0.1:8888")
 KEY = os.environ.get("UNSLOTH_KEY", "")
 VARIANTS = (1, 2, 4)
 SCHEMA = """
-create table if not exists users(id integer primary key, name text unique, salt blob, hash blob,
-  level text, admin integer default 0);
-create table if not exists attempts(id integer primary key, user_id int, task text, prompt text,
+create table if not exists attempts(id integer primary key, user text, task text, prompt text,
   n int, files text, ts real, secs real);
-create table if not exists results(user_id int, task text, attempt_id int, picked int, rating int,
-  ts real, primary key(user_id, task));
+create table if not exists results(user text, task text, attempt_id int, picked int, rating int,
+  ts real, primary key(user, task));
 """
 
 
@@ -34,8 +31,8 @@ def db():
     return c
 
 
-def pw_hash(pw, salt):
-    return hashlib.scrypt(pw.encode(), salt=salt, n=2**14, r=8, p=1)
+def users():  # re-read on every call: edit users.toml, no restart needed
+    return tomllib.loads(Path(os.environ.get("USERS", ROOT / "users.toml")).read_text())
 
 
 def secret():
@@ -46,16 +43,16 @@ def secret():
     return f.read_text().encode()
 
 
-def sign(uid):
-    body = f"{uid}.{int(time.time()) + 7 * 86400}"
-    return body + "." + hmac.new(secret(), body.encode(), "sha256").hexdigest()
+def sign(name):
+    body = f"{name}|{int(time.time()) + 7 * 86400}"
+    return body + "|" + hmac.new(secret(), body.encode(), "sha256").hexdigest()
 
 
 def verify(cookie):
     try:
-        uid, exp, mac = cookie.split(".")
-        good = hmac.new(secret(), f"{uid}.{exp}".encode(), "sha256").hexdigest()
-        return int(uid) if hmac.compare_digest(mac, good) and int(exp) > time.time() else None
+        name, exp, mac = cookie.rsplit("|", 2)
+        good = hmac.new(secret(), f"{name}|{exp}".encode(), "sha256").hexdigest()
+        return name if hmac.compare_digest(mac, good) and int(exp) > time.time() else None
     except Exception:
         return None
 
@@ -65,11 +62,11 @@ def tasks():
 
 
 def user_of(req):
-    uid = verify(req.cookies.get("s", ""))
-    u = db().execute("select * from users where id=?", (uid,)).fetchone() if uid else None
+    name = verify(req.cookies.get("s", ""))
+    u = users().get(name) if name else None
     if not u:
         raise web.HTTPUnauthorized()
-    return u
+    return {"name": name, "level": u.get("level", ""), "admin": bool(u.get("admin"))}
 
 
 def admin_of(req):
@@ -88,13 +85,13 @@ async def login(req):
     f = [t for t in fails.get(name, []) if t > time.time() - 60]
     if len(f) >= 5:
         raise web.HTTPTooManyRequests()
-    u = db().execute("select * from users where name=?", (name,)).fetchone()
-    ok = u and hmac.compare_digest(pw_hash(str(b.get("password", "")), u["salt"]), u["hash"])
+    u = users().get(name)
+    ok = u and hmac.compare_digest(str(b.get("password", "")).encode(), str(u["password"]).encode())
     if not ok:
         fails[name] = f + [time.time()]
         raise web.HTTPUnauthorized()
-    r = web.json_response({"name": name, "admin": bool(u["admin"])})
-    r.set_cookie("s", sign(u["id"]), httponly=True, samesite="None" if ORIGIN else "Lax", max_age=7 * 86400,
+    r = web.json_response({"name": name, "admin": bool(u.get("admin"))})
+    r.set_cookie("s", sign(name), httponly=True, samesite="None" if ORIGIN else "Lax", max_age=7 * 86400,
                  secure=bool(ORIGIN) or req.headers.get("X-Forwarded-Proto") == "https")
     return r
 
@@ -115,10 +112,10 @@ async def task_list(req):
     c = db()
     out = []
     for t in tasks():
-        n = c.execute("select count(*) from attempts where user_id=? and task=?", (u["id"], t["id"])).fetchone()[0]
-        r = c.execute("select picked, rating from results where user_id=? and task=?", (u["id"], t["id"])).fetchone()
+        n = c.execute("select count(*) from attempts where user=? and task=?", (u["name"], t["id"])).fetchone()[0]
+        r = c.execute("select picked, rating from results where user=? and task=?", (u["name"], t["id"])).fetchone()
         hist = [dict(prompt=a["prompt"], n=a["n"], files=json.loads(a["files"]), id=a["id"]) for a in
-                c.execute("select * from attempts where user_id=? and task=? order by id", (u["id"], t["id"]))]
+                c.execute("select * from attempts where user=? and task=? order by id", (u["name"], t["id"]))]
         out.append({**t, "attempts": n, "done": bool(r), "rating": r and r["rating"], "history": hist})
     return web.json_response(out)
 
@@ -148,8 +145,8 @@ async def generate(req):
             async with s.get(f"{UNSLOTH}/api/inference/images/gallery/{rec['id']}/file", headers=h) as r:
                 blobs.append(await r.read())
     c = db()
-    cur = c.execute("insert into attempts(user_id,task,prompt,n,files,ts,secs) values(?,?,?,?,?,?,?)",
-                    (u["id"], t["id"], prompt, n, "[]", time.time(), time.time() - t0))
+    cur = c.execute("insert into attempts(user,task,prompt,n,files,ts,secs) values(?,?,?,?,?,?,?)",
+                    (u["name"], t["id"], prompt, n, "[]", time.time(), time.time() - t0))
     aid = cur.lastrowid
     (DATA / "img").mkdir(exist_ok=True)
     files = []
@@ -168,12 +165,12 @@ async def finish(req):
     picked = b.get("picked")  # [attempt_id, index] or null = gave up
     rating = b.get("rating")
     if picked is not None:
-        a = c.execute("select * from attempts where id=? and user_id=? and task=?",
-                      (picked[0], u["id"], b.get("task"))).fetchone()
+        a = c.execute("select * from attempts where id=? and user=? and task=?",
+                      (picked[0], u["name"], b.get("task"))).fetchone()
         if not a or rating not in (1, 2, 3, 4, 5) or not 0 <= picked[1] < a["n"]:
             raise web.HTTPBadRequest()
     c.execute("insert or replace into results values(?,?,?,?,?,?)",
-              (u["id"], b["task"], picked and picked[0], picked and picked[1], picked and rating, time.time()))
+              (u["name"], b["task"], picked and picked[0], picked and picked[1], picked and rating, time.time()))
     c.commit()
     return web.json_response({})
 
@@ -181,8 +178,8 @@ async def finish(req):
 async def image(req):
     u = user_of(req)
     name = Path(req.match_info["name"]).name
-    a = db().execute("select user_id from attempts where id=?", (name.split("_")[0],)).fetchone()
-    if not a or (a["user_id"] != u["id"] and not u["admin"]):
+    a = db().execute("select user from attempts where id=?", (name.split("_")[0],)).fetchone()
+    if not a or (a["user"] != u["name"] and not u["admin"]):
         raise web.HTTPNotFound()
     return web.FileResponse(DATA / "img" / name)
 
@@ -195,12 +192,14 @@ async def task_image(req):
 def stats_rows():
     c = db()
     rows = []
-    for u in c.execute("select * from users where admin=0 order by name"):
+    for name, u in sorted(users().items()):
+        if u.get("admin"):
+            continue
         for t in tasks():
             a = c.execute("select count(*) n, coalesce(sum(n),0) imgs, coalesce(avg(length(prompt)),0) plen, "
-                          "min(ts) t0 from attempts where user_id=? and task=?", (u["id"], t["id"])).fetchone()
-            r = c.execute("select * from results where user_id=? and task=?", (u["id"], t["id"])).fetchone()
-            rows.append({"user": u["name"], "level": u["level"], "task": t["id"], "attempts": a["n"],
+                          "min(ts) t0 from attempts where user=? and task=?", (name, t["id"])).fetchone()
+            r = c.execute("select * from results where user=? and task=?", (name, t["id"])).fetchone()
+            rows.append({"user": name, "level": u.get("level", ""), "task": t["id"], "attempts": a["n"],
                          "images": a["imgs"], "avg_prompt_chars": round(a["plen"]),
                          "status": "gave_up" if r and r["picked"] is None else "done" if r else
                          "in_progress" if a["n"] else "not_started",
@@ -212,9 +211,9 @@ def stats_rows():
 async def admin_stats(req):
     admin_of(req)
     c = db()
-    prompts = [dict(r) for r in c.execute(
-        "select a.id, u.name user, u.level, a.task, a.prompt, a.n, a.files, a.ts from attempts a "
-        "join users u on u.id=a.user_id order by a.id")]
+    lv = {k: v.get("level", "") for k, v in users().items()}
+    prompts = [{**dict(r), "level": lv.get(r["user"], "")} for r in c.execute(
+        "select id, user, task, prompt, n, files, ts from attempts order by id")]
     return web.json_response({"summary": stats_rows(), "prompts": prompts})
 
 
@@ -261,13 +260,4 @@ def make_app():
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["adduser"]:
-        name, pw, level = sys.argv[2:5]
-        salt, c = os.urandom(16), db()
-        c.execute("insert into users(name,salt,hash,level,admin) values(?,?,?,?,?) on conflict(name) do update "
-                  "set salt=excluded.salt, hash=excluded.hash, level=excluded.level, admin=excluded.admin",
-                  (name, salt, pw_hash(pw, salt), level, int("--admin" in sys.argv)))
-        c.commit()
-        print("ok")
-    else:
-        web.run_app(make_app(), host="127.0.0.1", port=int(os.environ.get("PORT", 8080)))
+    web.run_app(make_app(), host="127.0.0.1", port=int(os.environ.get("PORT", 8080)))
