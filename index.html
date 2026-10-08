@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Prompt Image Lab</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px system-ui, sans-serif; max-width: 880px; margin: 0 auto; padding: 16px; }
+  textarea, input, select, button { font: inherit; padding: 8px; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 5em; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  #out { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+  #out figure { margin: 0; } #out img { width: 100%; display: block; }
+  details { margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<h1>Prompt Image Lab</h1>
+
+<details id="cfg">
+  <summary>Connection</summary>
+  <div class="row"><input id="base" size="40" placeholder="https://lab-tunnel-url"></div>
+  <div class="row"><input id="token" type="password" size="40" placeholder="token"></div>
+</details>
+
+<textarea id="prompt" placeholder="Prompt (for edit: describe the change)"></textarea>
+<div class="row">
+  <input id="file" type="file" accept="image/*">
+  <button id="clear" type="button">Remove image</button>
+  <label>Variants <select id="n"><option>1</option><option>2</option><option>4</option></select></label>
+  <button id="go">Generate</button>
+  <button id="all" disabled>Download all</button>
+</div>
+<p id="status"></p>
+<div id="out"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+// ponytail: connection stored in localStorage; the tunnel URL never lives in the public repo.
+for (const k of ["base", "token"]) {
+  try { $(k).value = localStorage.getItem(k) || ""; } catch {}
+  $(k).onchange = () => { try { localStorage.setItem(k, $(k).value.trim()); } catch {} };
+}
+if (!$("base").value) $("cfg").open = true;
+
+const api = (path, opts = {}) =>
+  fetch($("base").value.replace(/\/$/, "") + path, {
+    ...opts, headers: { Authorization: "Bearer " + $("token").value, ...opts.headers },
+  });
+
+$("clear").onclick = () => { $("file").value = ""; };
+
+// Patch an API-format ComfyUI workflow: prompt text, seed, batch size, source image.
+function patch(wf, { prompt, n, image }) {
+  const nodes = Object.values(wf);
+  const ks = nodes.find(x => x.class_type.startsWith("KSampler") || x.class_type === "SamplerCustomAdvanced");
+  const seed = Math.floor(Math.random() * 2 ** 32);
+  for (const x of nodes) {
+    if ("seed" in x.inputs) x.inputs.seed = seed;
+    if ("noise_seed" in x.inputs) x.inputs.noise_seed = seed;
+    if ("batch_size" in x.inputs && x.class_type.includes("Latent")) x.inputs.batch_size = n;
+    if (x.class_type === "LoadImage" && image) x.inputs.image = image;
+  }
+  // positive CLIPTextEncode: follow the sampler's "positive" link when present, else first encoder
+  const pos = ks && ks.inputs.positive ? wf[ks.inputs.positive[0]] : null;
+  const enc = (pos && "text" in pos.inputs ? pos : nodes.find(x => x.class_type === "CLIPTextEncode"));
+  enc.inputs.text = prompt;
+}
+
+const urls = [];
+$("go").onclick = async () => {
+  const prompt = $("prompt").value.trim();
+  if (!prompt) return;
+  $("go").disabled = true; $("all").disabled = true;
+  $("out").replaceChildren(); urls.length = 0;
+  try {
+    const f = $("file").files[0];
+    let image;
+    if (f) {
+      $("status").textContent = "Uploading…";
+      const fd = new FormData(); fd.append("image", f);
+      const r = await api("/upload/image", { method: "POST", body: fd });
+      if (!r.ok) throw new Error("upload " + r.status);
+      image = (await r.json()).name;
+    }
+    const wf = await (await fetch(f ? "workflows/edit.json" : "workflows/txt2img.json")).json();
+    patch(wf, { prompt, n: +$("n").value, image });
+    $("status").textContent = "Queued…";
+    const q = await api("/prompt", { method: "POST", body: JSON.stringify({ prompt: wf }) });
+    if (!q.ok) throw new Error("prompt " + q.status + " " + await q.text());
+    const id = (await q.json()).prompt_id;
+    let hist;
+    for (;;) { // ponytail: polling; switch to /ws for progress
+      await new Promise(r => setTimeout(r, 1500));
+      const h = await (await api("/history/" + id)).json();
+      if (h[id]?.outputs && Object.keys(h[id].outputs).length) { hist = h[id]; break; }
+      if (h[id]?.status?.status_str === "error") throw new Error("generation failed");
+    }
+    for (const o of Object.values(hist.outputs)) for (const im of o.images || []) {
+      const p = new URLSearchParams({ filename: im.filename, subfolder: im.subfolder, type: im.type });
+      const blob = await (await api("/view?" + p)).blob();
+      const u = URL.createObjectURL(blob); urls.push([u, im.filename]);
+      const fig = document.createElement("figure");
+      fig.innerHTML = `<img src="${u}"><a download="${im.filename}" href="${u}">Download</a>`;
+      $("out").append(fig);
+    }
+    $("status").textContent = urls.length + " image(s)";
+    $("all").disabled = !urls.length;
+  } catch (e) { $("status").textContent = "Error: " + e.message; }
+  $("go").disabled = false;
+};
+
+$("all").onclick = () => urls.forEach(([u, name], i) =>
+  setTimeout(() => Object.assign(document.createElement("a"), { href: u, download: name }).click(), i * 300));
+</script>
+</body>
+</html>
