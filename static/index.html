@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex"><title>Prompt Image Lab</title>
+<style>
+:root{color-scheme:light dark}
+body{font:16px system-ui,sans-serif;max-width:880px;margin:0 auto;padding:16px}
+input,textarea,select,button{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}
+textarea{width:100%;min-height:6em}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.card{border:1px solid #8886;border-radius:8px;padding:12px;cursor:pointer}
+.card.done{opacity:.6}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px}
+.grid img{width:100%;display:block}
+.grid label{display:block;border:2px solid transparent}
+.grid input:checked+img{outline:3px solid #2a7}
+.ref{max-width:260px}
+.hist{font-size:.9em;opacity:.8}
+</style></head><body>
+<h1>Prompt Image Lab</h1>
+<div id="login" hidden>
+  <div class="row"><input id="name" placeholder="login" autocomplete="username"></div>
+  <div class="row"><input id="pw" type="password" placeholder="password" autocomplete="current-password">
+  <button id="in">Log in</button></div>
+</div>
+<div id="app" hidden>
+  <div class="row"><span id="who"></span><button id="out">Log out</button></div>
+  <div id="list" class="cards"></div>
+  <div id="task" hidden>
+    <button id="back">&larr; Tasks</button>
+    <h2 id="title"></h2><p id="brief"></p><img id="ref" class="ref" hidden>
+    <textarea id="prompt" placeholder="Your prompt"></textarea>
+    <div class="row">
+      <label>Variants <select id="n"><option>1</option><option>2</option><option>4</option></select></label>
+      <button id="go">Generate</button>
+      <button id="giveup">Give up</button>
+    </div>
+    <p id="status"></p>
+    <div id="res" class="grid"></div>
+    <div id="rate" hidden class="row">
+      <label>Quality of the picked image
+        <select id="rating"><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select>
+      </label>
+      <button id="done">This is my final result</button>
+    </div>
+    <div id="hist" class="hist"></div>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const J=(u,b)=>fetch(u,b?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}:{});
+let T=[],cur=null,picked=null;
+
+async function start(){
+  const r=await J("/api/me");
+  $("login").hidden=r.ok; $("app").hidden=!r.ok;
+  if(!r.ok) return;
+  const m=await r.json(); $("who").textContent=m.name+(m.admin?" (admin)":"");
+  if(m.admin) $("who").innerHTML+=' <a href="/admin">stats</a>';
+  await load(); show(null);
+}
+async function load(){ T=await (await J("/api/tasks")).json(); }
+$("in").onclick=async()=>{
+  const r=await J("/api/login",{name:$("name").value,password:$("pw").value});
+  if(r.ok) start(); else alert(r.status==429?"Too many attempts, wait a minute":"Wrong login or password");
+};
+$("out").onclick=async()=>{await J("/api/logout",{});start();};
+
+function show(id){
+  cur=T.find(t=>t.id===id)||null; picked=null;
+  $("list").hidden=!!cur; $("task").hidden=!cur; $("res").replaceChildren(); $("rate").hidden=true; $("status").textContent="";
+  if(!cur){
+    $("list").replaceChildren(...T.map(t=>{const d=document.createElement("div");
+      d.className="card"+(t.done?" done":"");
+      d.innerHTML=`<b></b><div></div><small></small>`;
+      d.children[0].textContent=t.title; d.children[1].textContent=t.kind==="edit"?"Edit an image":"Generate an image";
+      d.children[2].textContent=t.done?"Finished":t.attempts?t.attempts+" attempts":"New";
+      d.onclick=()=>show(t.id); return d;}));
+    return;
+  }
+  $("title").textContent=cur.title; $("brief").textContent=cur.brief;
+  $("ref").hidden=!cur.image; if(cur.image) $("ref").src="/task-img/"+cur.image;
+  $("prompt").value="";
+  $("go").disabled=$("giveup").disabled=cur.done; 
+  renderHist();
+}
+$("back").onclick=async()=>{await load();show(null);};
+function renderHist(){
+  $("hist").replaceChildren(...cur.history.map((a,i)=>{const d=document.createElement("div");
+    d.textContent=`#${i+1}: ${a.prompt}`; return d;}));
+}
+$("go").onclick=async()=>{
+  const prompt=$("prompt").value.trim(); if(!prompt) return;
+  $("go").disabled=true; $("status").textContent="Generating…"; $("res").replaceChildren(); $("rate").hidden=true;
+  const r=await J("/api/generate",{task:cur.id,prompt,n:+$("n").value});
+  $("go").disabled=false;
+  if(!r.ok){$("status").textContent="Error "+r.status;return;}
+  const a=await r.json(); $("status").textContent="Pick the best one if it matches the task, or refine the prompt.";
+  cur.history.push({prompt,n:a.files.length,files:a.files,id:a.attempt}); renderHist();
+  $("res").replaceChildren(...a.files.map((f,i)=>{const l=document.createElement("label");
+    l.innerHTML=`<input type="radio" name="p" hidden><img src="/img/${f}"><a download href="/img/${f}">Download</a>`;
+    l.querySelector("input").onchange=()=>{picked=[a.attempt,i];$("rate").hidden=false;}; return l;}));
+};
+$("done").onclick=async()=>{
+  await J("/api/finish",{task:cur.id,picked,rating:+$("rating").value});
+  await load(); show(null);
+};
+$("giveup").onclick=async()=>{
+  if(!confirm("Give up on this task?")) return;
+  await J("/api/finish",{task:cur.id,picked:null}); await load(); show(null);
+};
+start();
+</script></body></html>

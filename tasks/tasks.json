@@ -1,0 +1,6 @@
+[
+  {"id": "gen-1", "kind": "generate", "title": "Red bicycle at sunset",
+   "brief": "Generate a photo-like image of a red bicycle leaning on a brick wall at sunset."},
+  {"id": "gen-2", "kind": "generate", "title": "Logo for a bakery",
+   "brief": "Generate a flat, minimal logo for a bakery called 'Morning Crumb'. The text must be readable."}
+]
