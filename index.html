@@ -8,7 +8,7 @@
 <style>
   :root { color-scheme: light dark; }
   body { font: 16px system-ui, sans-serif; max-width: 880px; margin: 0 auto; padding: 16px; }
-  textarea, input, select, button { font: inherit; padding: 8px; }
+  textarea, input, select, button { font: inherit; padding: 8px; max-width: 100%; }
   textarea { width: 100%; box-sizing: border-box; min-height: 5em; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
   #out { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
@@ -18,12 +18,6 @@
 </head>
 <body>
 <h1>Prompt Image Lab</h1>
-
-<details id="cfg">
-  <summary>Connection</summary>
-  <div class="row"><input id="base" size="40" placeholder="https://lab-tunnel-url"></div>
-  <div class="row"><input id="token" type="password" size="40" placeholder="token"></div>
-</details>
 
 <textarea id="prompt" placeholder="Prompt (for edit: describe the change)"></textarea>
 <div class="row">
@@ -36,19 +30,11 @@
 <p id="status"></p>
 <div id="out"></div>
 
+<script src="config.js"></script>
 <script>
 const $ = id => document.getElementById(id);
-// ponytail: connection stored in localStorage; the tunnel URL never lives in the public repo.
-for (const k of ["base", "token"]) {
-  try { $(k).value = localStorage.getItem(k) || ""; } catch {}
-  $(k).onchange = () => { try { localStorage.setItem(k, $(k).value.trim()); } catch {} };
-}
-if (!$("base").value) $("cfg").open = true;
 
-const api = (path, opts = {}) =>
-  fetch($("base").value.replace(/\/$/, "") + path, {
-    ...opts, headers: { Authorization: "Bearer " + $("token").value, ...opts.headers },
-  });
+const api = (path, opts) => fetch(LAB_URL.replace(/\/$/, "") + path, opts);
 
 $("clear").onclick = () => { $("file").value = ""; };
 
